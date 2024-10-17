@@ -28,11 +28,14 @@ def start_proxy_server(host, port):
 
 def handle_client(cliSock: socket):
     # Receive the web request from the client
-    request = cliSock.recv(BUFFER_SIZE).decode()
+    request = cliSock.recv(BUFFER_SIZE)
 
     if not request:
         cliSock.close()
         return
+    
+    # Decode Request bytes to string
+    request = request.decode()
 
     #Get the request url
     url = request.split()[1]
@@ -85,35 +88,39 @@ def handle_client(cliSock: socket):
         # Send the request to the web server. Includes the if-modified-since header
         webSock.sendall(webRequest.encode())
 
-        # Receive response from the web server
-        response = webSock.recv(BUFFER_SIZE)
+        # Receive response from the web server.
+        # Should be done in a loop to ensure a response over BUFFER_SIZE is captured
+        firstData = True    # This is so the cache is only checked on the first response. Prevents rare edge cases
+        while True:
+            response = webSock.recv(BUFFER_SIZE)
+            # If no more data, break 
+            if not response:
+                break
 
-        # Check for 304 Not Modified status code
-        if response.decode().startswith("HTTP/1.1 304 Not Modified"):
-            print(f"Not Modified, sending file from cache: {url}")
-            # Read data from the cache and send to client
-            with open(cacheFilePath, 'rb') as cache_file:
-                cliSock.sendfile(cache_file)
+            # Check for 304 Not Modified status code
+            if firstData and response.startswith(b"HTTP/1.1 304 Not Modified"):
+                print(f"Not Modified, sending file from cache: {url}")
+                # Read data from the cache and send to client
+                with open(cacheFilePath, 'rb') as cache_file:
+                    cliSock.sendfile(cache_file)
+            else:
+                # Cache the response. Append as there may be more data coming for long files etc.
+                with open(cacheFilePath, 'ab') as cache_file:
+                    cache_file.write(response)
 
-        else:
-            # Cache the response
-            with open(cacheFilePath, 'wb') as cache_file:
-                cache_file.write(response)
-
-            # Forward response to the client
-            cliSock.sendall(response)
+                # Forward response to the client
+                cliSock.sendall(response)
+            firstData = False
 
     # Handle errors
     except Exception as e:
         # Print Error Message and send 404 Not Found back to the client
-        print(f"Error when attempting to retrieve: {url}")
+        print(f"Error {e} when attempting to retrieve: {url}")
         response = b"HTTP/1.1 404 Not Found\r\n"
         cliSock.sendall(response)
 
     # Close the client socket
     cliSock.close()
-
-    return
 
 if __name__ == "__main__":
     start_proxy_server(proxy_host, proxy_port)
